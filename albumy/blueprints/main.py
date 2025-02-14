@@ -21,6 +21,9 @@ from albumy.utils import rename_image, resize_image, redirect_back, flash_errors
 
 import random
 
+from albumy.image_captioning import predict_caption
+from albumy.image_prediction import classify_image_beit
+
 main_bp = Blueprint('main', __name__)
 
 
@@ -123,19 +126,54 @@ def get_avatar(filename):
 def upload():
     if request.method == 'POST' and 'file' in request.files:
         f = request.files.get('file')
-        filename = rename_image(f.filename)
+        randomInteger = random.randint(0, 1000)
+        filename = f"imgName{randomInteger}.jpg"
         f.save(os.path.join(current_app.config['ALBUMY_UPLOAD_PATH'], filename))
-        filename_s = resize_image(f, filename, current_app.config['ALBUMY_PHOTO_SIZE']['small'])
-        filename_m = resize_image(f, filename, current_app.config['ALBUMY_PHOTO_SIZE']['medium'])
+
+        image_path = f"uploads/{filename}"
+        predicted_caption = predict_caption([image_path])
+        predicted_classes = classify_image_beit(filename)
+        print(f"virat:{predicted_classes}")
+        print(f"xCaptain:{predicted_caption}")
+        filename_s = f"imgName{randomInteger}.jpg"
+        filename_m = f"imgName{randomInteger}.jpg"
+        print(f"small image:{filename_s},large image:{filename_m}")
+
         photo = Photo(
             filename=filename,
             filename_s=filename_s,
             filename_m=filename_m,
-            author=current_user._get_current_object()
+            author=current_user._get_current_object(),
+            description=predicted_caption[0].strip("[]'")
         )
         db.session.add(photo)
         db.session.commit()
+
+        photo_id = photo.id
+        print(f"Photo added to DB with ID: {photo_id}")
+        add_tags_to_photo(photo_id, predicted_classes)
+
     return render_template('main/upload.html')
+
+def add_tags_to_photo(photo_id, predicted_classes):
+    tags_to_add = predicted_classes.split(',')
+    for tag_name in tags_to_add:
+        form = TagForm(tag=tag_name)
+        if form.validate():
+            photo = Photo.query.get_or_404(photo_id)
+            if current_user != photo.author and not current_user.can('MODERATE'):
+                abort(403)
+
+            tag = Tag.query.filter_by(name=tag_name).first()
+            if tag is None:
+                tag = Tag(name=tag_name)
+                db.session.add(tag)
+                db.session.commit()
+            if tag not in photo.tags:
+                photo.tags.append(tag)
+                db.session.commit()
+        else:
+            flash_errors(form)
 
 
 @main_bp.route('/photo/<int:photo_id>')
